@@ -1,7 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View, TouchableOpacity, Text, Alert, Share } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, Text, Alert, Share, ScrollView } from 'react-native';
 import { useState, useEffect } from 'react';
-import MapView, { Marker, Region, Callout } from 'react-native-maps';
+import MapView, { Marker, Region, Callout, Polyline } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import * as Location from 'expo-location';
 
 interface MarkerData {
@@ -17,6 +18,15 @@ interface MarkerData {
   category: 'current' | 'favorite' | 'restaurant' | 'photo' | 'custom';
 }
 
+interface RouteInfo {
+  distance: number;
+  duration: number;
+  mode: 'DRIVING' | 'WALKING' | 'TRANSIT';
+  coordinates: { latitude: number; longitude: number }[];
+}
+
+type TravelMode = 'DRIVING' | 'WALKING' | 'TRANSIT';
+
 export default function App() {
   const [region, setRegion] = useState<Region>({
     latitude: 37.78825,
@@ -27,6 +37,14 @@ export default function App() {
   const [markers, setMarkers] = useState<MarkerData[]>([]);
   const [currentLocation, setCurrentLocation] = useState<Location.LocationObject | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<'current' | 'favorite' | 'restaurant' | 'photo' | 'custom'>('current');
+  
+  // Routing states
+  const [isRoutingMode, setIsRoutingMode] = useState(false);
+  const [routeOrigin, setRouteOrigin] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [routeDestination, setRouteDestination] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [travelMode, setTravelMode] = useState<TravelMode>('DRIVING');
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+  const [showRouteDetails, setShowRouteDetails] = useState(false);
 
   useEffect(() => {
     getCurrentLocation();
@@ -145,6 +163,71 @@ export default function App() {
     return colors[category as keyof typeof colors] || '#007AFF';
   };
 
+  // Routing Functions
+  const startRouting = () => {
+    if (!currentLocation) {
+      Alert.alert('Location Required', 'Please wait for location to be detected');
+      return;
+    }
+    setIsRoutingMode(true);
+    setRouteOrigin({
+      latitude: currentLocation.coords.latitude,
+      longitude: currentLocation.coords.longitude
+    });
+    Alert.alert('Routing Mode', 'Tap any marker to get directions from your current location');
+  };
+
+  const stopRouting = () => {
+    setIsRoutingMode(false);
+    setRouteOrigin(null);
+    setRouteDestination(null);
+    setRouteInfo(null);
+    setShowRouteDetails(false);
+  };
+
+  const handleMarkerRouting = (marker: MarkerData) => {
+    if (isRoutingMode && routeOrigin) {
+      setRouteDestination(marker.coordinate);
+      setShowRouteDetails(true);
+    } else {
+      onMarkerPress(marker);
+    }
+  };
+
+  const formatDuration = (minutes: number): string => {
+    if (minutes < 60) {
+      return `${Math.round(minutes)} min`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = Math.round(minutes % 60);
+    return `${hours}h ${remainingMinutes}m`;
+  };
+
+  const formatDistance = (meters: number): string => {
+    if (meters < 1000) {
+      return `${Math.round(meters)} m`;
+    }
+    return `${(meters / 1000).toFixed(1)} km`;
+  };
+
+  const getTravelModeColor = (mode: TravelMode): string => {
+    const colors = {
+      DRIVING: '#007AFF',
+      WALKING: '#34C759',
+      TRANSIT: '#FF9500'
+    };
+    return colors[mode];
+  };
+
+  const getTravelModeIcon = (mode: TravelMode): string => {
+    const icons = {
+      DRIVING: '🚗',
+      WALKING: '🚶',
+      TRANSIT: '🚌'
+    };
+    return icons[mode];
+  };
+
   const removeLastMarker = () => {
     console.log('Remove button pressed, markers count:', markers.length);
     if (markers.length === 0) {
@@ -187,68 +270,166 @@ export default function App() {
             key={marker.id}
             coordinate={marker.coordinate}
             pinColor={getMarkerColor(marker.category)}
-            onPress={() => onMarkerPress(marker)}
+            onPress={() => handleMarkerRouting(marker)}
           >
-            <Callout
-              style={styles.calloutContainer}
-              onPress={() => shareLocation(marker)}
-            >
-              <View style={styles.calloutContent}>
-                <Text style={styles.calloutTitle}>{marker.title}</Text>
-                <Text style={styles.calloutDescription}>{marker.description}</Text>
-                <Text style={styles.calloutAddress}>{marker.address}</Text>
-                <View style={styles.calloutActions}>
-                  <Text style={styles.calloutCoordinates}>
-                    📍 {marker.coordinate.latitude.toFixed(4)}, {marker.coordinate.longitude.toFixed(4)}
-                  </Text>
-                  <Text style={styles.calloutTap}>Tap to share 📤</Text>
+            {!isRoutingMode && (
+              <Callout
+                style={styles.calloutContainer}
+                onPress={() => shareLocation(marker)}
+              >
+                <View style={styles.calloutContent}>
+                  <Text style={styles.calloutTitle}>{marker.title}</Text>
+                  <Text style={styles.calloutDescription}>{marker.description}</Text>
+                  <Text style={styles.calloutAddress}>{marker.address}</Text>
+                  <View style={styles.calloutActions}>
+                    <Text style={styles.calloutCoordinates}>
+                      📍 {marker.coordinate.latitude.toFixed(4)}, {marker.coordinate.longitude.toFixed(4)}
+                    </Text>
+                    <Text style={styles.calloutTap}>Tap to share 📤</Text>
+                  </View>
                 </View>
-              </View>
-            </Callout>
+              </Callout>
+            )}
           </Marker>
         ))}
+        
+        {/* Route Directions */}
+        {isRoutingMode && routeOrigin && routeDestination && (
+          <MapViewDirections
+            origin={routeOrigin}
+            destination={routeDestination}
+            apikey="YOUR_GOOGLE_MAPS_API_KEY" // You'll need to add your Google Maps API key
+            mode={travelMode}
+            strokeWidth={4}
+            strokeColor={getTravelModeColor(travelMode)}
+            onStart={() => console.log('Route calculation started')}
+            onReady={(result) => {
+              setRouteInfo({
+                distance: result.distance * 1000, // Convert km to meters
+                duration: result.duration,
+                mode: travelMode,
+                coordinates: result.coordinates
+              });
+              // Fit the map to show the entire route
+              if (result.coordinates.length > 0) {
+                // You can implement fitToCoordinates here if needed
+              }
+            }}
+            onError={(errorMessage) => {
+              console.error('Route calculation error:', errorMessage);
+              Alert.alert('Route Error', 'Could not calculate route. Please try again.');
+            }}
+          />
+        )}
       </MapView>
       
-      {/* Category Selection */}
-      <View style={styles.categoryContainer}>
-        {(['current', 'favorite', 'restaurant', 'photo', 'custom'] as const).map((category) => (
-          <TouchableOpacity
-            key={category}
-            style={[
-              styles.categoryButton,
-              { backgroundColor: getMarkerColor(category) },
-              selectedCategory === category && styles.selectedCategory
-            ]}
-            onPress={() => setSelectedCategory(category)}
-          >
-            <Text style={styles.categoryText}>
-              {category === 'current' ? '📍' :
-               category === 'favorite' ? '❤️' :
-               category === 'restaurant' ? '🍴' :
-               category === 'photo' ? '📷' : '📌'}
-            </Text>
+      {/* Category Selection - Hide during routing */}
+      {!isRoutingMode && (
+        <View style={styles.categoryContainer}>
+          {(['current', 'favorite', 'restaurant', 'photo', 'custom'] as const).map((category) => (
+            <TouchableOpacity
+              key={category}
+              style={[
+                styles.categoryButton,
+                { backgroundColor: getMarkerColor(category) },
+                selectedCategory === category && styles.selectedCategory
+              ]}
+              onPress={() => setSelectedCategory(category)}
+            >
+              <Text style={styles.categoryText}>
+                {category === 'current' ? '📍' :
+                 category === 'favorite' ? '❤️' :
+                 category === 'restaurant' ? '🍴' :
+                 category === 'photo' ? '📷' : '📌'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+      
+      {/* Routing Controls */}
+      {isRoutingMode && (
+        <View style={styles.routingContainer}>
+          <View style={styles.travelModeContainer}>
+            {(['DRIVING', 'WALKING', 'TRANSIT'] as const).map((mode) => (
+              <TouchableOpacity
+                key={mode}
+                style={[
+                  styles.travelModeButton,
+                  { backgroundColor: getTravelModeColor(mode) },
+                  travelMode === mode && styles.selectedTravelMode
+                ]}
+                onPress={() => setTravelMode(mode)}
+              >
+                <Text style={styles.travelModeText}>{getTravelModeIcon(mode)}</Text>
+                <Text style={styles.travelModeLabel}>{mode}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          
+          <TouchableOpacity style={styles.stopRoutingButton} onPress={stopRouting}>
+            <Text style={styles.stopRoutingText}>Stop Routing ❌</Text>
           </TouchableOpacity>
-        ))}
-      </View>
+        </View>
+      )}
+      
+      {/* Route Information Panel */}
+      {showRouteDetails && routeInfo && (
+        <View style={styles.routeInfoContainer}>
+          <View style={styles.routeInfoHeader}>
+            <Text style={styles.routeInfoTitle}>
+              {getTravelModeIcon(routeInfo.mode)} {routeInfo.mode} Route
+            </Text>
+            <TouchableOpacity onPress={() => setShowRouteDetails(false)}>
+              <Text style={styles.closeRouteInfo}>✖️</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.routeStats}>
+            <View style={styles.routeStat}>
+              <Text style={styles.routeStatLabel}>Distance</Text>
+              <Text style={styles.routeStatValue}>{formatDistance(routeInfo.distance)}</Text>
+            </View>
+            <View style={styles.routeStat}>
+              <Text style={styles.routeStatLabel}>Duration</Text>
+              <Text style={styles.routeStatValue}>{formatDuration(routeInfo.duration)}</Text>
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* Action Buttons */}
       <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.addButton]}
-          onPress={addMarkerAtCurrentLocation}
-        >
-          <Text style={styles.buttonText}>Add {selectedCategory} Marker</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={[styles.button, styles.removeButton]}
-          onPress={() => {
-            console.log('Remove button touched');
-            removeLastMarker();
-          }}
-        >
-          <Text style={styles.buttonText}>Remove Last</Text>
-        </TouchableOpacity>
+        {!isRoutingMode ? (
+          <>
+            <TouchableOpacity
+              style={[styles.button, styles.addButton]}
+              onPress={addMarkerAtCurrentLocation}
+            >
+              <Text style={styles.buttonText}>Add {selectedCategory} Marker</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.button, styles.routeButton]}
+              onPress={startRouting}
+            >
+              <Text style={styles.buttonText}>🗺️ Get Directions</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.button, styles.removeButton]}
+              onPress={() => {
+                console.log('Remove button touched');
+                removeLastMarker();
+              }}
+            >
+              <Text style={styles.buttonText}>Remove Last</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <View style={styles.routingInstructions}>
+            <Text style={styles.routingText}>🗺️ Tap any marker to get directions</Text>
+          </View>
+        )}
       </View>
       
       <StatusBar style="auto" />
@@ -333,6 +514,102 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontWeight: 'bold',
   },
+  // Routing Styles
+  routingContainer: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 15,
+    padding: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  travelModeContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  travelModeButton: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    marginHorizontal: 2,
+  },
+  selectedTravelMode: {
+    borderWidth: 2,
+    borderColor: '#000',
+  },
+  travelModeText: {
+    fontSize: 20,
+    marginBottom: 2,
+  },
+  travelModeLabel: {
+    fontSize: 10,
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  stopRoutingButton: {
+    backgroundColor: '#FF3B30',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  stopRoutingText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  // Route Information Styles
+  routeInfoContainer: {
+    position: 'absolute',
+    bottom: 120,
+    left: 20,
+    right: 20,
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  routeInfoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  routeInfoTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  closeRouteInfo: {
+    fontSize: 18,
+  },
+  routeStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  routeStat: {
+    alignItems: 'center',
+  },
+  routeStatLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 5,
+  },
+  routeStatValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#007AFF',
+  },
   // Button Styles
   buttonContainer: {
     position: 'absolute',
@@ -346,18 +623,34 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 10,
     alignItems: 'center',
+    marginHorizontal: 2,
   },
   addButton: {
     backgroundColor: '#007AFF',
-    marginRight: 5,
+  },
+  routeButton: {
+    backgroundColor: '#34C759',
   },
   removeButton: {
     backgroundColor: '#FF3B30',
-    marginLeft: 5,
   },
   buttonText: {
     color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  routingInstructions: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 122, 255, 0.9)',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  routingText: {
+    color: 'white',
     fontSize: 14,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
 });
